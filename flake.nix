@@ -197,6 +197,7 @@
               pkgs.tesseract
               pkgs.poppler-utils
               pkgs.imagemagick
+              pkgs.gopls
             ]
             ++ enabledPackages;
           };
