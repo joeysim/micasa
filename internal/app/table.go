@@ -16,7 +16,7 @@ import (
 
 // defaultStyle is reused for cells that need no special styling, avoiding
 // a lipgloss.NewStyle() allocation per cell per render.
-var defaultStyle = lipgloss.NewStyle()
+var defaultStyle = appStyles.Base()
 
 const (
 	linkArrow                 = "→"   // FK link to another tab
@@ -83,14 +83,14 @@ func renderHeaderRow(
 ) string {
 	cells := make([]string, 0, len(specs))
 	last := len(specs) - 1
-	arrow := appStyles.SortArrow
+	arrow := appStyles.SortArrow()
 	for i, spec := range specs {
 		width := safeWidth(widths, i)
 		title := spec.Title
 		if (spec.Link != nil || spec.Kind == cellEntity) && columnHasLinks(rows, i) {
-			title = title + " " + appStyles.LinkIndicator.Render(linkArrow)
+			title = title + " " + appStyles.LinkIndicator().Render(linkArrow)
 		} else if spec.Kind == cellDrilldown {
-			title = title + " " + appStyles.LinkIndicator.Render(drilldownArrow)
+			title = title + " " + appStyles.LinkIndicator().Render(drilldownArrow)
 		}
 		// Scroll arrows embedded in edge column headers.
 		if i == 0 && hasLeft {
@@ -102,9 +102,9 @@ func renderHeaderRow(
 		indicator := sortIndicator(sorts, i)
 		text := formatHeaderCell(title, indicator, width)
 		if i == colCursor {
-			cells = append(cells, appStyles.ColActiveHeader.Render(text))
+			cells = append(cells, appStyles.ColActiveHeader().Render(text))
 		} else {
-			cells = append(cells, appStyles.TableHeader.Render(text))
+			cells = append(cells, appStyles.TableHeader().Render(text))
 		}
 	}
 	return joinCells(cells, separators)
@@ -474,17 +474,17 @@ func renderCell(
 	style := cellStyle(cellValue.Kind)
 	if cellValue.Null {
 		value = symEmptySet
-		style = appStyles.Null
+		style = appStyles.Null()
 	} else if value == "" {
 		value = symEmDash
-		style = appStyles.Empty
+		style = appStyles.Empty()
 	} else if cellValue.Kind == cellDrilldown && value != "0" {
 		return renderPillCell(value, width, hl, deleted, dimmed)
 	} else if cellValue.Kind == cellDrilldown {
 		// Zero count: dim instead of pill to keep the grid quiet.
-		style = appStyles.Empty
+		style = appStyles.Empty()
 	} else if cellValue.Kind == cellStatus {
-		if s, ok := appStyles.StatusStyles[value]; ok {
+		if s, ok := appStyles.StatusStyle(value); ok {
 			style = s
 		}
 		value = statusLabel(value)
@@ -495,7 +495,7 @@ func renderCell(
 			style = entityCellStyle(value)
 			value = value[2:]
 		} else {
-			style = appStyles.CellDim
+			style = appStyles.CellDim()
 		}
 	} else if cellValue.Kind == cellUrgency {
 		style = urgencyStyle(value)
@@ -505,7 +505,7 @@ func renderCell(
 
 	// Pin match overrides semantic color with the muted/pin color.
 	if pinMatch {
-		style = appStyles.Pinned
+		style = appStyles.Pinned()
 	}
 
 	if deleted {
@@ -553,7 +553,7 @@ func renderCell(
 			if gap < 1 {
 				gap = 1
 			}
-			dimSuffix := appStyles.Empty.Render(noteSuffix)
+			dimSuffix := appStyles.Empty().Render(noteSuffix)
 			return styled + strings.Repeat(" ", gap) + dimSuffix
 		}
 		if pad := width - textW; pad > 0 {
@@ -581,7 +581,7 @@ func renderCell(
 		if gap < 1 {
 			gap = 1
 		}
-		dimSuffix := appStyles.Empty.Render(noteSuffix)
+		dimSuffix := appStyles.Empty().Render(noteSuffix)
 		return styledText + strings.Repeat(" ", gap) + dimSuffix
 	}
 
@@ -598,12 +598,12 @@ func renderPillCell(
 	deleted bool,
 	dimmed bool,
 ) string {
-	style := appStyles.Drilldown
+	style := appStyles.Drilldown()
 	if dimmed && !deleted {
-		style = appStyles.CellDim
+		style = appStyles.CellDim()
 	}
 	if deleted {
-		style = appStyles.DeletedCell
+		style = appStyles.DeletedCell()
 		pill := style.Render(value)
 		pillW := lipgloss.Width(pill)
 		if pad := width - pillW; pad > 0 {
@@ -621,7 +621,7 @@ func renderPillCell(
 
 	// Pad to fill the column; pill is always right-aligned.
 	if pad := width - pillW; pad > 0 {
-		padStyle := lipgloss.NewStyle()
+		padStyle := appStyles.Base()
 		if hl == highlightRow {
 			padStyle = padStyle.Background(surface)
 		}
@@ -654,46 +654,37 @@ func joinCells(cells []string, separators []string) string {
 func cellStyle(kind cellKind) lipgloss.Style {
 	switch kind {
 	case cellMoney:
-		return appStyles.Money
+		return appStyles.Money()
 	case cellReadonly:
-		return appStyles.Readonly
+		return appStyles.Readonly()
 	case cellDrilldown:
-		return appStyles.Drilldown
+		return appStyles.Drilldown()
 	default:
 		return defaultStyle
 	}
 }
 
-// Pre-computed urgency/warranty styles to avoid allocating per cell per frame.
+// Urgency/warranty/entity-kind styles live in appStyles to avoid
+// duplicate definitions. Package-level aliases for readability in
+// cell-rendering code.
 var (
-	urgencyOverdue  = lipgloss.NewStyle().Foreground(danger).Bold(true)
-	urgencySoon     = lipgloss.NewStyle().Foreground(secondary)
-	urgencyUpcoming = lipgloss.NewStyle().Foreground(warning)
-	urgencyFar      = lipgloss.NewStyle().Foreground(success)
-	warrantyExpired = lipgloss.NewStyle().Foreground(danger)
-	warrantyActive  = lipgloss.NewStyle().Foreground(success)
+	urgencyOverdue  = appStyles.UrgencyOverdue()
+	urgencySoon     = appStyles.UrgencySoon()
+	urgencyUpcoming = appStyles.UrgencyUpcoming()
+	urgencyFar      = appStyles.UrgencyFar()
+	warrantyExpired = appStyles.WarrantyExpired()
+	warrantyActive  = appStyles.WarrantyActive()
 )
-
-// entityKindLetterStyles maps the single-letter entity prefix to a
-// colorblind-safe color from the Wong palette.
-var entityKindLetterStyles = map[byte]lipgloss.Style{
-	'A': lipgloss.NewStyle().Foreground(muted),     // Appliance
-	'I': lipgloss.NewStyle().Foreground(danger),    // Incident
-	'M': lipgloss.NewStyle().Foreground(secondary), // Maintenance
-	'P': lipgloss.NewStyle().Foreground(accent),    // Project
-	'Q': lipgloss.NewStyle().Foreground(success),   // Quote
-	'V': lipgloss.NewStyle().Foreground(warning),   // Vendor
-}
 
 // entityCellStyle returns a style for the entity cell based on the kind-letter
 // prefix. The letter (A/I/M/P/Q/V) maps to a kind-specific color.
 func entityCellStyle(value string) lipgloss.Style {
 	if len(value) > 0 {
-		if s, ok := entityKindLetterStyles[value[0]]; ok {
+		if s, ok := appStyles.EntityKindStyle(value[0]); ok {
 			return s
 		}
 	}
-	return lipgloss.NewStyle().Foreground(textDim)
+	return appStyles.TextDim()
 }
 
 // urgencyStyle returns a style colored from green (far out) through yellow

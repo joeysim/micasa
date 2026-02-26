@@ -199,7 +199,7 @@ func (m *Model) startExtractionOverlay(
 	}
 
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
-	sp.Style = lipgloss.NewStyle().Foreground(accent)
+	sp.Style = appStyles.AccentText()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -592,7 +592,7 @@ func (m *Model) dispatchCreateDocument(op extract.Operation) error {
 	applyStringField(op.Data, "notes", &doc.Notes)
 	applyStringField(op.Data, "entity_kind", &doc.EntityKind)
 	if v, ok := op.Data["entity_id"]; ok {
-		if n := parseUintFromData(v); n > 0 {
+		if n := extract.ParseUint(v); n > 0 {
 			doc.EntityID = n
 		}
 	}
@@ -600,7 +600,7 @@ func (m *Model) dispatchCreateDocument(op extract.Operation) error {
 }
 
 func (m *Model) dispatchUpdateDocument(op extract.Operation) error {
-	rowID := parseUintFromData(op.Data["id"])
+	rowID := extract.ParseUint(op.Data["id"])
 	if rowID == 0 {
 		return fmt.Errorf("update documents requires id in data")
 	}
@@ -612,7 +612,7 @@ func (m *Model) dispatchUpdateDocument(op extract.Operation) error {
 	applyStringField(op.Data, "notes", &doc.Notes)
 	applyStringField(op.Data, "entity_kind", &doc.EntityKind)
 	if v, ok := op.Data["entity_id"]; ok {
-		if n := parseUintFromData(v); n > 0 {
+		if n := extract.ParseUint(v); n > 0 {
 			doc.EntityID = n
 		}
 	}
@@ -636,7 +636,7 @@ func (m *Model) dispatchCreateVendor(op extract.Operation) error {
 func (m *Model) dispatchCreateQuote(op extract.Operation) error {
 	quote := data.Quote{}
 	if v, ok := op.Data["project_id"]; ok {
-		if n := parseUintFromData(v); n > 0 {
+		if n := extract.ParseUint(v); n > 0 {
 			quote.ProjectID = n
 		}
 	}
@@ -656,7 +656,7 @@ func (m *Model) dispatchCreateQuote(op extract.Operation) error {
 	// Resolve vendor: by vendor_id or inline vendor name.
 	var vendor data.Vendor
 	if v, ok := op.Data["vendor_id"]; ok {
-		if n := parseUintFromData(v); n > 0 {
+		if n := extract.ParseUint(v); n > 0 {
 			got, err := m.store.GetVendor(n)
 			if err != nil {
 				return fmt.Errorf("get vendor %d: %w", n, err)
@@ -680,12 +680,12 @@ func (m *Model) dispatchCreateMaintenance(op extract.Operation) error {
 	item := data.MaintenanceItem{}
 	applyStringField(op.Data, "name", &item.Name)
 	if v, ok := op.Data["category_id"]; ok {
-		if n := parseUintFromData(v); n > 0 {
+		if n := extract.ParseUint(v); n > 0 {
 			item.CategoryID = n
 		}
 	}
 	if v, ok := op.Data["appliance_id"]; ok {
-		if n := parseUintFromData(v); n > 0 {
+		if n := extract.ParseUint(v); n > 0 {
 			item.ApplianceID = &n
 		}
 	}
@@ -722,25 +722,6 @@ func applyStringField(data map[string]any, key string, dst *string) {
 			*dst = s
 		}
 	}
-}
-
-// parseUintFromData extracts a uint from a JSON value (float64 or string).
-func parseUintFromData(v any) uint {
-	switch val := v.(type) {
-	case json.Number:
-		if n, err := strconv.ParseUint(val.String(), 10, strconv.IntSize); err == nil {
-			return uint(n)
-		}
-	case float64:
-		if val > 0 && val <= math.MaxUint {
-			return uint(val)
-		}
-	case string:
-		if n, err := strconv.ParseUint(strings.TrimSpace(val), 10, strconv.IntSize); err == nil {
-			return uint(n)
-		}
-	}
-	return 0
 }
 
 // parseIntFromData extracts an int from a JSON value.
@@ -817,7 +798,7 @@ func (m *Model) acceptDeferredExtraction() error {
 			applyStringField(op.Data, "notes", &doc.Notes)
 			applyStringField(op.Data, "entity_kind", &doc.EntityKind)
 			if v, ok := op.Data["entity_id"]; ok {
-				if n := parseUintFromData(v); n > 0 {
+				if n := extract.ParseUint(v); n > 0 {
 					doc.EntityID = n
 				}
 			}
@@ -1101,8 +1082,8 @@ func (m *Model) buildExtractionOverlay() string {
 	innerW := contentW - 4 // padding
 
 	// Title line.
-	title := m.styles.HeaderSection.Render(" Extracting ")
-	filename := m.styles.HeaderHint.Render(" " + truncateRight(ex.Filename, innerW-16))
+	title := m.styles.HeaderSection().Render(" Extracting ")
+	filename := m.styles.HeaderHint().Render(" " + truncateRight(ex.Filename, innerW-16))
 
 	return m.buildExtractionPipelineOverlay(contentW, innerW, title+filename)
 }
@@ -1134,7 +1115,7 @@ func (m *Model) buildExtractionPipelineOverlay(
 	contentW, innerW int, titleLine string,
 ) string {
 	ex := m.extraction
-	ruleStyle := lipgloss.NewStyle().Foreground(border)
+	ruleStyle := appStyles.Rule()
 
 	// Compute column widths across all active steps for alignment.
 	active := ex.activeSteps()
@@ -1242,28 +1223,11 @@ func (m *Model) buildExtractionPipelineOverlay(
 
 	vpView := ex.Viewport.View()
 	if ex.exploring {
-		vpView = lipgloss.NewStyle().Foreground(textDim).Render(vpView)
+		vpView = appStyles.TextDim().Render(vpView)
 	}
 
-	// Scroll indicator in rule.
-	var rule string
-	if ex.Viewport.TotalLineCount() > ex.Viewport.Height {
-		var label string
-		switch {
-		case ex.Viewport.AtTop():
-			label = "Top"
-		case ex.Viewport.AtBottom():
-			label = "Bot"
-		default:
-			label = fmt.Sprintf("%d%%", int(ex.Viewport.ScrollPercent()*100))
-		}
-		indicator := lipgloss.NewStyle().Foreground(textDim).Render(" " + label + " ")
-		indicatorW := lipgloss.Width(indicator)
-		rightW := max(0, innerW-indicatorW)
-		rule = ruleStyle.Render(strings.Repeat(symHLine, rightW)) + indicator
-	} else {
-		rule = ruleStyle.Render(strings.Repeat(symHLine, innerW))
-	}
+	rule := m.scrollRule(innerW, ex.Viewport.TotalLineCount(), ex.Viewport.Height,
+		ex.Viewport.AtTop(), ex.Viewport.AtBottom(), ex.Viewport.ScrollPercent(), symHLine)
 
 	// Hint line varies by mode.
 	var hints []string
@@ -1303,10 +1267,7 @@ func (m *Model) buildExtractionPipelineOverlay(
 	parts = append(parts, ruleStyle.Render(strings.Repeat(symHLine, innerW)), hintStr)
 	boxContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(accent).
-		Padding(1, 2).
+	return m.styles.OverlayBox().
 		Width(contentW).
 		Render(boxContent)
 }
@@ -1321,27 +1282,27 @@ func (m *Model) renderOperationPreviewSection(innerW int, interactive bool) stri
 	}
 	groups := ex.previewGroups
 	if len(groups) == 0 {
-		return lipgloss.NewStyle().Foreground(textDim).Render("no operations")
+		return appStyles.TextDim().Render("no operations")
 	}
 
-	sep := m.styles.TableSeparator.Render(" " + symVLine + " ")
-	divSep := m.styles.TableSeparator.Render(symHLine + symCross + symHLine)
+	sep := m.styles.TableSeparator().Render(" " + symVLine + " ")
+	divSep := m.styles.TableSeparator().Render(symHLine + symCross + symHLine)
 	sepW := lipgloss.Width(sep)
 
 	// Tab bar: active tab highlighted in explore mode, all dimmed otherwise.
 	tabParts := make([]string, 0, len(groups)*2)
 	for i, g := range groups {
 		if interactive && i == ex.previewTab {
-			tabParts = append(tabParts, m.styles.TabActive.Render(g.name))
+			tabParts = append(tabParts, m.styles.TabActive().Render(g.name))
 		} else {
-			tabParts = append(tabParts, m.styles.TabInactive.Render(g.name))
+			tabParts = append(tabParts, m.styles.TabInactive().Render(g.name))
 		}
 		if i < len(groups)-1 {
 			tabParts = append(tabParts, "   ")
 		}
 	}
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Left, tabParts...)
-	underline := m.styles.TabUnderline.Render(strings.Repeat(symHLineHeavy, innerW))
+	underline := m.styles.TabUnderline().Render(strings.Repeat(symHLineHeavy, innerW))
 
 	// Always render a single tab: the active one in explore mode,
 	// the first one in pipeline mode.
@@ -1364,7 +1325,7 @@ func (m *Model) renderOperationPreviewSection(innerW int, interactive bool) stri
 
 	result := b.String()
 	if !interactive {
-		result = lipgloss.NewStyle().Foreground(textDim).Render(result)
+		result = appStyles.TextDim().Render(result)
 	}
 	return result
 }
@@ -1393,7 +1354,7 @@ func (m *Model) renderPreviewTable(
 	header := renderHeaderRow(
 		g.specs, widths, seps, colCursor, nil, false, false, g.cells,
 	)
-	divider := renderDivider(widths, seps, divSep, m.styles.TableSeparator)
+	divider := renderDivider(widths, seps, divSep, m.styles.TableSeparator())
 
 	rowCursor := -1
 	if interactive {
@@ -1431,23 +1392,23 @@ func (m *Model) renderExtractionStep(
 ) string {
 	name := stepName(si)
 	ex := m.extraction
-	hint := m.styles.HeaderHint
+	hint := m.styles.HeaderHint()
 
 	var icon string
 	var nameStyle lipgloss.Style
 	switch info.Status {
 	case stepPending:
 		icon = "  "
-		nameStyle = m.styles.ExtPending
+		nameStyle = m.styles.ExtPending()
 	case stepRunning:
 		icon = ex.Spinner.View() + " "
-		nameStyle = m.styles.ExtRunning
+		nameStyle = m.styles.ExtRunning()
 	case stepDone:
-		icon = m.styles.ExtOk.Render("ok") + " "
-		nameStyle = m.styles.ExtDone
+		icon = m.styles.ExtOk().Render("ok") + " "
+		nameStyle = m.styles.ExtDone()
 	case stepFailed:
-		icon = m.styles.ExtFail.Render("xx") + " "
-		nameStyle = m.styles.ExtFailed
+		icon = m.styles.ExtFail().Render("xx") + " "
+		nameStyle = m.styles.ExtFailed()
 	}
 
 	// Determine if expanded: auto-expand running/failed, and keep LLM expanded
@@ -1464,9 +1425,9 @@ func (m *Model) renderExtractionStep(
 	stepSettled := info.Status == stepDone || info.Status == stepFailed
 	if focused && (ex.Done || stepSettled) {
 		if expanded {
-			cursor = m.styles.ExtCursor.Render(symTriDownSm + " ")
+			cursor = m.styles.ExtCursor().Render(symTriDownSm + " ")
 		} else {
-			cursor = m.styles.ExtCursor.Render(symTriRightSm + " ")
+			cursor = m.styles.ExtCursor().Render(symTriRightSm + " ")
 		}
 	}
 
@@ -1496,7 +1457,7 @@ func (m *Model) renderExtractionStep(
 	}
 	if si == stepLLM && info.Status == stepDone && ex.Done && focused {
 		hdr.WriteString("  ")
-		hdr.WriteString(m.styles.ExtRerun.Render("r to rerun"))
+		hdr.WriteString(m.styles.ExtRerun().Render("r to rerun"))
 	}
 	header := hdr.String()
 
@@ -1506,7 +1467,7 @@ func (m *Model) renderExtractionStep(
 
 	// Expanded: header + rendered log content with left border pipe.
 	pipeIndent := "     " // align pipe under step name
-	pipe := m.styles.TableSeparator.Render(symVLine) + " "
+	pipe := m.styles.TableSeparator().Render(symVLine) + " "
 	logW := innerW - len(pipeIndent) - 2 // pipe + space
 	raw := strings.Join(info.Logs, "\n")
 
@@ -1521,7 +1482,7 @@ func (m *Model) renderExtractionStep(
 		md := "```json\n" + formatted + "\n```"
 		rendered = strings.TrimSpace(ex.renderMarkdown(md, logW))
 	} else {
-		rendered = m.styles.HeaderHint.Render(wordWrap(raw, logW))
+		rendered = m.styles.HeaderHint().Render(wordWrap(raw, logW))
 	}
 
 	var b strings.Builder
@@ -1789,7 +1750,7 @@ func (m *Model) extractionOverlayWidth() int {
 		if len(ex.previewGroups) == 0 {
 			ex.previewGroups = groupOperationsByTable(ex.operations)
 		}
-		sep := m.styles.TableSeparator.Render(" " + symVLine + " ")
+		sep := m.styles.TableSeparator().Render(" " + symVLine + " ")
 		sepW := lipgloss.Width(sep)
 		needed := previewNaturalWidth(ex.previewGroups, sepW) + 4 // +4 for padding
 		if needed > w {

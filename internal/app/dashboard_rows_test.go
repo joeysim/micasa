@@ -17,7 +17,7 @@ func TestDashMaintSplitRows(t *testing.T) {
 	m.styles = appStyles
 
 	lastSrv := time.Date(2025, 10, 1, 0, 0, 0, 0, time.UTC)
-	m.dashboard = dashboardData{
+	m.dash.data = dashboardData{
 		Overdue: []maintenanceUrgency{{
 			Item: data.MaintenanceItem{
 				ID:             1,
@@ -41,7 +41,7 @@ func TestDashMaintSplitRows(t *testing.T) {
 	assert.Equal(t, "14d", overdueRows[0].Cells[1].Text)
 	assert.Equal(
 		t,
-		m.styles.DashOverdue,
+		m.styles.DashOverdue(),
 		overdueRows[0].Cells[1].Style,
 		"overdue duration uses DashOverdue style",
 	)
@@ -52,7 +52,7 @@ func TestDashMaintSplitRows(t *testing.T) {
 	assert.Equal(t, "10d", upcomingRows[0].Cells[1].Text)
 	assert.Equal(
 		t,
-		m.styles.DashUpcoming,
+		m.styles.DashUpcoming(),
 		upcomingRows[0].Cells[1].Style,
 		"upcoming duration uses DashUpcoming style",
 	)
@@ -60,7 +60,7 @@ func TestDashMaintSplitRows(t *testing.T) {
 
 func TestDashMaintSplitRowsEmpty(t *testing.T) {
 	m := newTestModel()
-	m.dashboard = dashboardData{}
+	m.dash.data = dashboardData{}
 	overdue, upcoming := m.dashMaintSplitRows()
 	assert.Nil(t, overdue)
 	assert.Nil(t, upcoming)
@@ -70,7 +70,7 @@ func TestDashProjectRowsColumns(t *testing.T) {
 	m := newTestModel()
 	m.styles = appStyles
 
-	m.dashboard = dashboardData{
+	m.dash.data = dashboardData{
 		ActiveProjects: []data.Project{{
 			Title:  "Deck Build",
 			Status: data.ProjectStatusInProgress,
@@ -91,7 +91,7 @@ func TestDashExpiringRowsOverdueAndUpcoming(t *testing.T) {
 	expiredDate := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
 	upcomingDate := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 
-	m.dashboard = dashboardData{
+	m.dash.data = dashboardData{
 		ExpiringWarranties: []warrantyStatus{
 			{
 				Appliance:   data.Appliance{ID: 1, Name: "Fridge", WarrantyExpiry: &expiredDate},
@@ -115,7 +115,7 @@ func TestDashExpiringRowsOverdueAndUpcoming(t *testing.T) {
 
 func TestDashExpiringRowsEmpty(t *testing.T) {
 	m := newTestModel()
-	m.dashboard = dashboardData{}
+	m.dash.data = dashboardData{}
 	rows := m.dashExpiringRows()
 	assert.Nil(t, rows)
 }

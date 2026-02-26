@@ -140,6 +140,33 @@ var (
 	helpGotoBottom = key.NewBinding(key.WithKeys(keyShiftG))
 )
 
+// pullState groups fields for an in-progress Ollama model pull.
+type pullState struct {
+	active   bool               // true while a pull is in progress
+	fromChat bool               // true when initiated from chat /model
+	display  string             // status bar progress text
+	peak     float64            // high-water mark for progress bar
+	cancel   context.CancelFunc // cancel in-flight pull
+	progress progress.Model     // bubbles progress bar widget
+}
+
+// dashState groups dashboard overlay fields.
+type dashState struct {
+	data         dashboardData
+	cursor       int
+	nav          []dashNavEntry
+	expanded     map[string]bool
+	scrollOffset int
+	totalLines   int
+	flash        string
+}
+
+// notePreviewState holds the text shown in the note preview overlay.
+type notePreviewState struct {
+	text  string
+	title string
+}
+
 type Model struct {
 	store                  *data.Store
 	dbPath                 string
@@ -153,12 +180,7 @@ type Model struct {
 	extractors             []extract.Extractor // configured extractors
 	extractionReady        bool                // true once extraction model confirmed available
 	pendingExtractionDocID *uint               // doc saved without LLM; extract after pull
-	pulling                bool                // true while a model pull is in progress
-	pullFromChat           bool                // true when pull was initiated from chat /model
-	pullDisplay            string              // status bar progress text
-	pullPeak               float64             // high-water mark for progress bar
-	pullCancel             context.CancelFunc  // cancel in-flight pull
-	pullProgress           progress.Model      // bubbles progress bar widget
+	pull                   pullState
 	extraction             *extractionLogState // non-nil when extraction overlay is active
 	chat                   *chatState          // non-nil when chat overlay is open
 	styles                 *Styles
@@ -170,18 +192,10 @@ type Model struct {
 	helpViewport           *viewport.Model
 	showHouse              bool
 	showDashboard          bool
-	showNotePreview        bool
-	notePreviewText        string
-	notePreviewTitle       string
+	notePreview            *notePreviewState
 	calendar               *calendarState
 	columnFinder           *columnFinderState
-	dashboard              dashboardData
-	dashCursor             int
-	dashNav                []dashNavEntry
-	dashExpanded           map[string]bool
-	dashScrollOffset       int
-	dashTotalLines         int
-	dashFlash              string
+	dash                   dashState
 	hasHouse               bool
 	house                  data.HouseProfile
 	mode                   Mode
@@ -237,7 +251,7 @@ func NewModel(store *data.Store, options Options) (*Model, error) {
 		progress.WithGradient(textDim.Dark, accent.Dark),
 		progress.WithFillCharacters('━', '┄'),
 	)
-	pprog.PercentageStyle = lipgloss.NewStyle().Foreground(textDim)
+	pprog.PercentageStyle = appStyles.TextDim()
 
 	model := &Model{
 		store:              store,
@@ -249,7 +263,7 @@ func NewModel(store *data.Store, options Options) (*Model, error) {
 		extractionEnabled:  options.ExtractionConfig.Enabled,
 		extractionThinking: options.ExtractionConfig.Thinking,
 		extractors:         options.ExtractionConfig.Extractors,
-		pullProgress:       pprog,
+		pull:               pullState{progress: pprog},
 		styles:             appStyles,
 		tabs:               NewTabs(),
 		active:             0,
@@ -400,11 +414,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Note preview overlay: any key dismisses it.
-	if m.showNotePreview {
+	if m.notePreview != nil {
 		if _, ok := msg.(tea.KeyMsg); ok {
-			m.showNotePreview = false
-			m.notePreviewText = ""
-			m.notePreviewTitle = ""
+			m.notePreview = nil
 		}
 		return m, nil
 	}
@@ -560,7 +572,7 @@ func (m *Model) handleConfirmDiscard(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 // widgets. Keys like D, b/f, ?, q fall through to the normal handlers.
 func (m *Model) handleDashboardKeys(key tea.KeyMsg) (tea.Cmd, bool) {
 	if key.String() != keyEnter {
-		m.dashFlash = ""
+		m.dash.flash = ""
 	}
 	switch key.String() {
 	case keyJ, keyDown:
@@ -794,9 +806,7 @@ func (m *Model) handleNormalEnter() error {
 	// On a notes column, show the note preview overlay.
 	if spec.Kind == cellNotes {
 		if c, ok := m.selectedCell(col); ok && c.Value != "" {
-			m.notePreviewTitle = spec.Title
-			m.notePreviewText = c.Value
-			m.showNotePreview = true
+			m.notePreview = &notePreviewState{text: c.Value, title: spec.Title}
 		}
 		return nil
 	}
@@ -924,9 +934,7 @@ func (m *Model) handleCalendarKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirmCalendar()
 	case keyEsc:
 		m.calendar = nil
-		m.formKind = formNone
-		m.formData = nil
-		m.editID = nil
+		m.resetFormState()
 	}
 	return m, nil
 }
@@ -1464,7 +1472,7 @@ func (m *Model) reloadIfStale(tab *Tab) error {
 // dashboardVisible reports whether the dashboard overlay should actually
 // render. The preference may be on but there's nothing to show.
 func (m *Model) dashboardVisible() bool {
-	return m.showDashboard && !m.dashboard.empty()
+	return m.showDashboard && !m.dash.data.empty()
 }
 
 func (m *Model) toggleDashboard() {
@@ -1679,9 +1687,7 @@ func (m *Model) toggleSettledFilter() bool {
 	if hasColumnPins(tab, col) {
 		// Turn off: clear status column pins.
 		clearPinsForColumn(tab, col)
-		applyRowFilter(tab, m.magMode)
-		applySorts(tab)
-		m.updateTabViewport(tab)
+		m.refreshTable(tab)
 		m.setStatusInfo("Settled shown.")
 	} else {
 		// Turn on: pin all active (non-settled) statuses, activate filter.
@@ -1689,9 +1695,7 @@ func (m *Model) toggleSettledFilter() bool {
 			togglePin(tab, col, status)
 		}
 		tab.FilterActive = true
-		applyRowFilter(tab, m.magMode)
-		applySorts(tab)
-		m.updateTabViewport(tab)
+		m.refreshTable(tab)
 		m.setStatusInfo("Settled hidden.")
 	}
 	return true
@@ -1742,10 +1746,8 @@ func (m *Model) reloadTab(tab *Tab) error {
 	tab.FullRows = rows
 	tab.FullMeta = meta
 	tab.FullCellRows = cellRows
-	applyRowFilter(tab, m.magMode)
 	tab.Stale = false
-	applySorts(tab)
-	m.updateTabViewport(tab)
+	m.refreshTable(tab)
 	return nil
 }
 
@@ -1828,7 +1830,7 @@ func (m *Model) statusLines() int {
 	if m.status.Text != "" {
 		lines++
 	}
-	if m.pullDisplay != "" {
+	if m.pull.display != "" {
 		lines++
 	}
 	return lines
@@ -1880,7 +1882,7 @@ func (m *Model) checkExtractionModelCmd() tea.Cmd {
 // completion actions depend on who started the pull.
 func (m *Model) handlePullProgress(msg pullProgressMsg) tea.Cmd {
 	if msg.Err != nil {
-		fromChat := m.pullFromChat
+		fromChat := m.pull.fromChat
 		m.clearPullState()
 		if fromChat && m.chat != nil {
 			m.chat.Messages = append(m.chat.Messages, chatMessage{
@@ -1895,7 +1897,7 @@ func (m *Model) handlePullProgress(msg pullProgressMsg) tea.Cmd {
 		return nil
 	}
 	if msg.Done {
-		fromChat := m.pullFromChat
+		fromChat := m.pull.fromChat
 		m.clearPullState()
 		m.status = statusMsg{}
 		// Mark extraction model as ready if it matches.
@@ -1935,11 +1937,11 @@ func (m *Model) handlePullProgress(msg pullProgressMsg) tea.Cmd {
 		return nil
 	}
 
-	m.pulling = true
+	m.pull.active = true
 	if msg.PullState != nil {
-		m.pullCancel = msg.PullState.Cancel
+		m.pull.cancel = msg.PullState.Cancel
 	}
-	m.pullDisplay = m.formatPullProgress(msg)
+	m.pull.display = m.formatPullProgress(msg)
 	m.resizeTables()
 
 	ps := msg.PullState
@@ -1956,17 +1958,17 @@ func (m *Model) formatPullProgress(msg pullProgressMsg) string {
 		return label
 	}
 	pct := msg.Percent
-	if pct > m.pullPeak {
-		m.pullPeak = pct
+	if pct > m.pull.peak {
+		m.pull.peak = pct
 	} else {
-		pct = m.pullPeak
+		pct = m.pull.peak
 	}
 	barW := m.width/3 - lipgloss.Width(label) - 2
 	if barW < 15 {
 		barW = 15
 	}
-	m.pullProgress.Width = barW
-	return label + " " + m.pullProgress.ViewAs(pct)
+	m.pull.progress.Width = barW
+	return label + " " + m.pull.progress.ViewAs(pct)
 }
 
 // extractionLLMClient returns the LLM client configured for extraction,
@@ -2019,7 +2021,7 @@ func (m *Model) afterDocumentSave() tea.Cmd {
 		// If LLM is configured but model not ready, queue for after pull.
 		if m.extractionEnabled && m.llmClient != nil && !m.extractionReady {
 			m.pendingExtractionDocID = &docID
-			if !m.pulling {
+			if !m.pull.active {
 				m.setStatusInfo("checking extraction model" + symEllipsis)
 				return m.checkExtractionModelCmd()
 			}
@@ -2038,18 +2040,15 @@ func (m *Model) afterDocumentSave() tea.Cmd {
 
 // cancelPull cancels any in-flight model pull.
 func (m *Model) cancelPull() {
-	if m.pullCancel != nil {
-		m.pullCancel()
+	if m.pull.cancel != nil {
+		m.pull.cancel()
 	}
 	m.clearPullState()
 }
 
 func (m *Model) clearPullState() {
-	m.pulling = false
-	m.pullFromChat = false
-	m.pullDisplay = ""
-	m.pullPeak = 0
-	m.pullCancel = nil
+	prog := m.pull.progress // preserve the progress bar widget
+	m.pull = pullState{progress: prog}
 }
 
 func (m *Model) saveForm() tea.Cmd {
@@ -2262,11 +2261,24 @@ func (m *Model) submitInlineInput() {
 	m.reloadAfterFormSave(kind)
 }
 
+// resetFormState zeroes all form-related fields. Every path that exits a
+// form, inline edit, or calendar overlay should call this to prevent drift.
+func (m *Model) resetFormState() {
+	m.formKind = formNone
+	m.form = nil
+	m.formData = nil
+	m.formSnapshot = nil
+	m.formDirty = false
+	m.confirmDiscard = false
+	m.pendingFormInit = nil
+	m.editID = nil
+	m.notesEditMode = false
+	m.notesFieldPtr = nil
+}
+
 func (m *Model) closeInlineInput() {
 	m.inlineInput = nil
-	m.formKind = formNone
-	m.formData = nil
-	m.editID = nil
+	m.resetFormState()
 }
 
 // exitForm closes the form and restores the previous mode. If editID is
@@ -2281,16 +2293,7 @@ func (m *Model) exitForm() {
 	} else {
 		m.setAllTableKeyMaps(normalTableKeyMap())
 	}
-	m.formKind = formNone
-	m.form = nil
-	m.formData = nil
-	m.formSnapshot = nil
-	m.formDirty = false
-	m.confirmDiscard = false
-	m.pendingFormInit = nil
-	m.editID = nil
-	m.notesEditMode = false
-	m.notesFieldPtr = nil
+	m.resetFormState()
 	if savedID != nil {
 		if tab := m.effectiveTab(); tab != nil {
 			selectRowByID(tab, *savedID)
@@ -2365,6 +2368,32 @@ func (m *Model) overlayContentWidth() int {
 	return w
 }
 
+// scrollRule renders a horizontal rule with an embedded Vim-style scroll
+// indicator (Top/Bot/N%) when content overflows the viewport.
+func (m *Model) scrollRule(
+	width, totalLines, viewportH int,
+	atTop, atBottom bool,
+	pct float64,
+	ch string,
+) string {
+	if totalLines <= viewportH {
+		return m.styles.Rule().Render(strings.Repeat(ch, width))
+	}
+	var label string
+	switch {
+	case atTop:
+		label = "Top"
+	case atBottom:
+		label = "Bot"
+	default:
+		label = fmt.Sprintf("%d%%", int(pct*100))
+	}
+	indicator := m.styles.TextDim().Render(" " + label + " ")
+	indicatorW := lipgloss.Width(indicator)
+	rightW := max(0, width-indicatorW)
+	return m.styles.Rule().Render(strings.Repeat(ch, rightW)) + indicator
+}
+
 func (m *Model) terminalTooSmall() bool {
 	return m.effectiveWidth() < minUsableWidth || m.effectiveHeight() < minUsableHeight
 }
@@ -2376,7 +2405,7 @@ func (m *Model) terminalTooSmall() bool {
 func (m *Model) hasActiveOverlay() bool {
 	return m.dashboardVisible() ||
 		m.calendar != nil ||
-		m.showNotePreview ||
+		m.notePreview != nil ||
 		m.columnFinder != nil ||
 		(m.extraction != nil && m.extraction.Visible) ||
 		m.helpViewport != nil
@@ -2471,9 +2500,7 @@ func (m *Model) togglePinAtCursor() {
 	// pin the magnitude representation; otherwise pin the raw value.
 	pinValue := cellDisplayValue(c, m.magMode)
 	pinned := togglePin(tab, col, pinValue)
-	applyRowFilter(tab, m.magMode)
-	applySorts(tab)
-	m.updateTabViewport(tab)
+	m.refreshTable(tab)
 	if pinned {
 		m.setStatusInfo("Pinned.")
 	} else {
@@ -2490,9 +2517,7 @@ func (m *Model) toggleFilterActivation() {
 	// ("eager mode"): arm the filter first, then every n immediately filters.
 	tab.FilterActive = !tab.FilterActive
 	if hasPins(tab) {
-		applyRowFilter(tab, m.magMode)
-		applySorts(tab)
-		m.updateTabViewport(tab)
+		m.refreshTable(tab)
 	}
 }
 
@@ -2502,9 +2527,7 @@ func (m *Model) clearAllPins() {
 		return
 	}
 	clearPins(tab)
-	applyRowFilter(tab, m.magMode)
-	applySorts(tab)
-	m.updateTabViewport(tab)
+	m.refreshTable(tab)
 	m.setStatusInfo("Pins cleared.")
 }
 
@@ -2515,9 +2538,7 @@ func (m *Model) toggleFilterInvert() {
 	}
 	tab.FilterInverted = !tab.FilterInverted
 	if hasPins(tab) {
-		applyRowFilter(tab, m.magMode)
-		applySorts(tab)
-		m.updateTabViewport(tab)
+		m.refreshTable(tab)
 	}
 }
 
@@ -2580,6 +2601,14 @@ func (m *Model) updateAllViewports() {
 	if dc := m.detail(); dc != nil {
 		m.updateTabViewport(&dc.Tab)
 	}
+}
+
+// refreshTable reapplies row filters, sorts, and viewport layout for a tab.
+// Use this after any change to pins, filter state, or row data.
+func (m *Model) refreshTable(tab *Tab) {
+	applyRowFilter(tab, m.magMode)
+	applySorts(tab)
+	m.updateTabViewport(tab)
 }
 
 func (m *Model) updateTabViewport(tab *Tab) {
