@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cpcloud/micasa/internal/locale"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -34,6 +35,7 @@ const (
 	settingShowDashboard     = "ui.show_dashboard"
 	settingUnitSystem        = "ui.unit_system"
 	settingTesseractHintSeen = "hint.tesseract_shown"
+	settingCurrency          = "locale.currency"
 
 	// chatHistoryMax is the maximum number of chat inputs retained.
 	chatHistoryMax = 200
@@ -97,10 +99,10 @@ func (s *Store) PutShowDashboard(show bool) error {
 func (s *Store) GetUnitSystem() (UnitSystem, error) {
 	val, err := s.GetSetting(settingUnitSystem)
 	if err != nil {
-		return DefaultUnitSystem(), err
+		return UnitSystemForLocale(locale.DetectLocale()), err
 	}
 	if val == "" {
-		return DefaultUnitSystem(), nil
+		return UnitSystemForLocale(locale.DetectLocale()), nil
 	}
 	return ParseUnitSystem(val), nil
 }
@@ -120,6 +122,17 @@ func (s *Store) TesseractHintSeen() bool {
 // MarkTesseractHintSeen records that the tesseract hint was shown.
 func (s *Store) MarkTesseractHintSeen() error {
 	return s.PutSetting(settingTesseractHintSeen, "true")
+}
+
+// GetCurrency returns the persisted currency code (e.g. "USD", "EUR"),
+// or "" if none has been set.
+func (s *Store) GetCurrency() (string, error) {
+	return s.GetSetting(settingCurrency)
+}
+
+// PutCurrency persists the currency code to the database.
+func (s *Store) PutCurrency(code string) error {
+	return s.PutSetting(settingCurrency, code)
 }
 
 // AppendChatInput adds a prompt to the persistent history, deduplicating
