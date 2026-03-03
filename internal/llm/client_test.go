@@ -652,3 +652,39 @@ func TestNewClientLocalProviderKeepsLoopbackURL(t *testing.T) {
 		})
 	}
 }
+
+// TestNewClientOllamaV1Suffix verifies that the /v1 suffix is appended
+// correctly for Ollama base URLs, including edge cases like trailing slashes
+// and URLs that already contain /v1.
+func TestNewClientOllamaV1Suffix(t *testing.T) {
+	// Use an httptest server so the provider actually receives requests at
+	// the expected path -- this proves the suffix logic produces a working URL.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			jsonResponse(w, `{"data":[{"id":"qwen3:latest"}]}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	tests := []struct {
+		name    string
+		baseURL string
+	}{
+		{"no suffix", srv.URL},
+		{"trailing slash", srv.URL + "/"},
+		{"with /v1", srv.URL + "/v1"},
+		{"with /v1/", srv.URL + "/v1/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := NewClient(
+				"ollama", tt.baseURL, "qwen3", "", testTimeout,
+			)
+			require.NoError(t, err)
+			// Ping hits /v1/models -- success means the suffix was correct.
+			assert.NoError(t, c.Ping(context.Background()))
+		})
+	}
+}
