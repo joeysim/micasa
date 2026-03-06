@@ -64,9 +64,9 @@ type LLM struct {
 	// Currency is handled by [locale] section. Optional; defaults to empty.
 	ExtraContext string `toml:"extra_context" env:"MICASA_LLM_EXTRA_CONTEXT"`
 
-	// Timeout is the maximum time to wait for quick LLM server operations
-	// (ping, model listing, auto-detect). Go duration string, e.g. "5s",
-	// "10s", "500ms". Default: "5s".
+	// Timeout is the maximum time for a single LLM response (including
+	// streaming). Go duration string, e.g. "5m", "10m". Default: "5m".
+	// Quick operations (ping, model listing) use a shorter fixed deadline.
 	Timeout string `toml:"timeout" env:"MICASA_LLM_TIMEOUT"`
 
 	// Thinking controls the model's reasoning effort level. Supported values:
@@ -249,7 +249,7 @@ type Extraction struct {
 	TextTimeout string `toml:"text_timeout" env:"MICASA_TEXT_TIMEOUT"`
 
 	// LLMTimeout is the maximum time to wait for the LLM extraction
-	// inference step. Go duration string, e.g. "2m", "90s". Default: "2m".
+	// inference step. Go duration string, e.g. "5m", "90s". Default: "5m".
 	LLMTimeout string `toml:"llm_timeout" env:"MICASA_EXTRACTION_LLM_TIMEOUT"`
 
 	// Thinking controls the model's reasoning effort level for extraction.
@@ -312,8 +312,8 @@ const (
 	DefaultBaseURL              = "http://localhost:11434"
 	DefaultModel                = "qwen3"
 	DefaultProvider             = "ollama"
-	DefaultLLMTimeout           = 5 * time.Second
-	DefaultLLMExtractionTimeout = 2 * time.Minute
+	DefaultLLMTimeout           = 5 * time.Minute
+	DefaultLLMExtractionTimeout = DefaultLLMTimeout
 	DefaultCacheTTL             = 30 * 24 * time.Hour // 30 days
 	DefaultMaxExtractPages      = 20
 	DefaultTextTimeout          = 30 * time.Second
@@ -433,7 +433,7 @@ func LoadFromPath(path string) (Config, error) {
 		d, err := time.ParseDuration(cfg.LLM.Timeout)
 		if err != nil {
 			return cfg, fmt.Errorf(
-				"llm.timeout: invalid duration %q -- use Go syntax like \"5s\" or \"10s\"",
+				"llm.timeout: invalid duration %q -- use Go syntax like \"5m\" or \"10m\"",
 				cfg.LLM.Timeout,
 			)
 		}
@@ -505,7 +505,7 @@ func LoadFromPath(path string) (Config, error) {
 		d, err := time.ParseDuration(cfg.Extraction.LLMTimeout)
 		if err != nil {
 			return cfg, fmt.Errorf(
-				"extraction.llm_timeout: invalid duration %q -- use Go syntax like \"2m\" or \"90s\"",
+				"extraction.llm_timeout: invalid duration %q -- use Go syntax like \"5m\" or \"90s\"",
 				cfg.Extraction.LLMTimeout,
 			)
 		}
@@ -977,10 +977,10 @@ model = "` + DefaultModel + `"
 # Use this to inject domain-specific details about your house, region, etc.
 # extra_context = "My house is a 1920s craftsman in Portland, OR."
 
-# Timeout for quick LLM server operations (ping, model listing).
-# Go duration syntax: "5s", "10s", "500ms", etc. Default: "5s".
-# Increase if your LLM server is slow to respond.
-# timeout = "5s"
+# Maximum time for a single LLM response (including streaming).
+# Go duration syntax: "5m", "10m", etc. Default: "5m".
+# Increase for very slow models or complex queries.
+# timeout = "5m"
 
 # Model reasoning effort level. Supported: none, low, medium, high, auto.
 # Empty = don't send (server default).
@@ -1021,9 +1021,9 @@ model = "` + DefaultModel + `"
 # Increase if you routinely process very large PDFs.
 # text_timeout = "30s"
 
-# Timeout for LLM extraction inference. Go duration syntax: "2m", "90s", etc.
-# Default: "2m". Increase for slow local models or complex documents.
-# llm_timeout = "2m"
+# Timeout for LLM extraction inference. Go duration syntax: "5m", "90s", etc.
+# Default: "5m". Increase for slow local models or complex documents.
+# llm_timeout = "5m"
 
 # Maximum pages for async extraction of scanned documents. Default: 20.
 # max_extract_pages = 20
