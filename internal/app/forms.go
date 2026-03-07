@@ -2445,13 +2445,13 @@ func (m *Model) newDocumentFilePicker(title string) *huh.FilePicker {
 	return huh.NewFilePicker().
 		Key(title).
 		Title(title + " " + short).
-		Description(keyH + "/" + symLeft + " back " + symMiddleDot + " " + keyEnter + " open").
+		Description(filePickerDesc(false)).
 		Cursor(symTriRightSm).
 		CurrentDirectory(dir).
 		Picking(true).
 		FileAllowed(true).
 		DirAllowed(false).
-		ShowHidden(true).
+		ShowHidden(false).
 		ShowPermissions(false).
 		Height(h)
 }

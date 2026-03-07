@@ -73,6 +73,118 @@ func TestFilePickerBackNavigatesUp(t *testing.T) {
 	}
 }
 
+func TestFilePickerDefaultHidesHiddenFiles(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+
+	m := newTestModelWithStore(t)
+	require.NoError(t, m.startQuickDocumentForm())
+
+	fp := requireFilePicker(t, m)
+	assert.False(t, filePickerShowHidden(fp),
+		"filepicker should hide hidden files by default")
+}
+
+func TestFilePickerToggleHidden(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+
+	m := newTestModelWithStore(t)
+	require.NoError(t, m.startQuickDocumentForm())
+
+	fp := requireFilePicker(t, m)
+	require.False(t, filePickerShowHidden(fp), "should start hidden")
+
+	// Press H to show hidden files.
+	sendKey(m, keyShiftH)
+	fp = requireFilePicker(t, m)
+	assert.True(t, filePickerShowHidden(fp),
+		"pressing H should show hidden files")
+
+	// Press H again to hide hidden files.
+	sendKey(m, keyShiftH)
+	fp = requireFilePicker(t, m)
+	assert.False(t, filePickerShowHidden(fp),
+		"pressing H again should hide hidden files")
+}
+
+func TestFilePickerToggleHiddenStatusMessage(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+
+	m := newTestModelWithStore(t)
+	require.NoError(t, m.startQuickDocumentForm())
+
+	// Toggle on.
+	sendKey(m, keyShiftH)
+	assert.Equal(t, "Showing hidden files.", m.status.Text)
+
+	// Toggle off.
+	sendKey(m, keyShiftH)
+	assert.Equal(t, "Hiding hidden files.", m.status.Text)
+}
+
+func TestFilePickerDescriptionReflectsHiddenState(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+
+	m := newTestModelWithStore(t)
+	require.NoError(t, m.startQuickDocumentForm())
+
+	fp := requireFilePicker(t, m)
+	desc := filePickerDescription(fp)
+	assert.Contains(t, desc, "\x1b[9m",
+		"'hidden' should be struck through when hidden files are not shown")
+
+	sendKey(m, keyShiftH)
+	fp = requireFilePicker(t, m)
+	desc = filePickerDescription(fp)
+	assert.NotContains(t, desc, "\x1b[9m",
+		"'hidden' should not be struck through when hidden files are shown")
+}
+
+func TestFilePickerToggleHiddenPersistsAcrossNavigation(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "subdir")
+	require.NoError(t, os.Mkdir(child, 0o750))
+	t.Chdir(child)
+
+	m := newTestModelWithStore(t)
+	require.NoError(t, m.startQuickDocumentForm())
+
+	// Toggle to show hidden files.
+	sendKey(m, keyShiftH)
+	fp := requireFilePicker(t, m)
+	require.True(t, filePickerShowHidden(fp))
+
+	// Navigate up to parent directory.
+	sendBackKey(m, "h")
+	fp = requireFilePicker(t, m)
+	assert.True(t, filePickerShowHidden(fp),
+		"ShowHidden should persist after navigating to parent directory")
+}
+
+func TestFilePickerToggleHiddenNoOpOnNonFilePicker(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+
+	m := newTestModelWithStore(t)
+	// Full document form starts with the Title input focused, not the picker.
+	require.NoError(t, m.startDocumentForm(""))
+	require.Equal(t, modeForm, m.mode)
+
+	field := m.fs.form.GetFocusedField()
+	require.NotNil(t, field)
+	_, isFP := field.(*huh.FilePicker)
+	require.False(t, isFP, "focused field should not be a FilePicker")
+
+	// Pressing H on a non-FilePicker field should not panic or set status.
+	m.status = statusMsg{}
+	sendKey(m, keyShiftH)
+	assert.Empty(t, m.status.Text,
+		"H on non-FilePicker should not produce a status message")
+}
+
 func TestFilePickerTitleShowsCurrentDir(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)
