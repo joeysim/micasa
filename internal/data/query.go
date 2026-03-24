@@ -5,6 +5,7 @@ package data
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -275,51 +276,10 @@ func (s *Store) DataDump() string {
 		if name == TableSyncOplogEntries || name == TableSyncDevices {
 			continue
 		}
-		//nolint:gosec // table name comes from sqlite_master, not user input
-		sqlRows, err := s.db.Raw(fmt.Sprintf("SELECT * FROM %s", name)).Rows()
+		rows, cols, err := dumpTable(s, name)
 		if err != nil {
 			continue
 		}
-		cols, err := sqlRows.Columns()
-		if err != nil {
-			_ = sqlRows.Close()
-			continue
-		}
-		// Find the deleted_at column so we can skip soft-deleted rows.
-		// Raw SQL bypasses GORM's automatic WHERE deleted_at IS NULL scope.
-		deletedAtIdx := -1
-		for i, c := range cols {
-			if strings.ToLower(c) == ColDeletedAt {
-				deletedAtIdx = i
-				break
-			}
-		}
-
-		var rows [][]string
-		for sqlRows.Next() {
-			values := make([]any, len(cols))
-			ptrs := make([]any, len(cols))
-			for i := range values {
-				ptrs[i] = &values[i]
-			}
-			if err := sqlRows.Scan(ptrs...); err != nil {
-				continue
-			}
-			// Skip soft-deleted rows: deleted_at is non-null.
-			if deletedAtIdx >= 0 && values[deletedAtIdx] != nil {
-				continue
-			}
-			row := make([]string, len(cols))
-			for i, v := range values {
-				if v == nil {
-					row[i] = ""
-				} else {
-					row[i] = fmt.Sprintf("%v", v)
-				}
-			}
-			rows = append(rows, row)
-		}
-		_ = sqlRows.Close()
 
 		if len(rows) == 0 {
 			continue
@@ -470,4 +430,65 @@ func containsWord(s, keyword string) bool {
 func isIdentChar(b byte) bool {
 	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') ||
 		(b >= '0' && b <= '9') || b == '_'
+}
+
+// dumpTable queries all non-deleted rows from a single table, returning
+// them as string slices along with column names. The sql.Rows lifecycle
+// is scoped to this function so defer closes correctly.
+func dumpTable(s *Store, name string) ([][]string, []string, error) {
+	//nolint:gosec // table name comes from sqlite_master, not user input
+	sqlRows, err := s.db.Raw(fmt.Sprintf("SELECT * FROM %s", name)).Rows()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = sqlRows.Close() }()
+	cols, err := sqlRows.Columns()
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := scanTableRows(sqlRows, cols)
+	if err != nil {
+		return nil, nil, err
+	}
+	return rows, cols, nil
+}
+
+// scanTableRows reads all non-deleted rows from an open sql.Rows into
+// string slices. The caller must close sqlRows after this returns.
+func scanTableRows(sqlRows *sql.Rows, cols []string) ([][]string, error) {
+	deletedAtIdx := -1
+	for i, c := range cols {
+		if strings.ToLower(c) == ColDeletedAt {
+			deletedAtIdx = i
+			break
+		}
+	}
+
+	var rows [][]string
+	for sqlRows.Next() {
+		values := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range values {
+			ptrs[i] = &values[i]
+		}
+		if err := sqlRows.Scan(ptrs...); err != nil {
+			continue
+		}
+		if deletedAtIdx >= 0 && values[deletedAtIdx] != nil {
+			continue
+		}
+		row := make([]string, len(cols))
+		for i, v := range values {
+			if v == nil {
+				row[i] = ""
+			} else {
+				row[i] = fmt.Sprintf("%v", v)
+			}
+		}
+		rows = append(rows, row)
+	}
+	if err := sqlRows.Err(); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
