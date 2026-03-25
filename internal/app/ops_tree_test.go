@@ -4,6 +4,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -411,6 +412,22 @@ func TestAutoExpand(t *testing.T) {
 	assert.True(t, expanded["operations.1.data"])
 }
 
+func TestOpsTreePreviewGroupsPopulated(t *testing.T) {
+	t.Parallel()
+	m := newOpsTreeModel(t)
+
+	tab := m.effectiveTab()
+	tab.ColCursor = int(documentColOps)
+	sendKey(m, "enter")
+
+	require.NotNil(t, m.opsTree)
+	require.NotEmpty(t, m.opsTree.previewGroups, "preview groups should be populated")
+
+	// testOpsJSON has vendors create + documents update -> 2 groups.
+	assert.Len(t, m.opsTree.previewGroups, 2)
+	assert.Equal(t, 0, m.opsTree.previewTab)
+}
+
 func TestOpsTreeCollapseNestedContainer(t *testing.T) {
 	t.Parallel()
 	m := newOpsTreeModel(t)
@@ -434,4 +451,172 @@ func TestOpsTreeCollapseNestedContainer(t *testing.T) {
 	sendKey(m, "h")
 	assert.False(t, m.opsTree.expanded["operations.0.data"], "h should collapse data node")
 	assert.Equal(t, 4, m.opsTree.cursor, "cursor stays on data node")
+}
+
+func TestOpsTreeTablePreviewRendersInView(t *testing.T) {
+	t.Parallel()
+	m := newOpsTreeModel(t)
+
+	tab := m.effectiveTab()
+	tab.ColCursor = int(documentColOps)
+	sendKey(m, "enter")
+	require.NotNil(t, m.opsTree)
+	require.NotEmpty(t, m.opsTree.previewGroups)
+
+	view := m.buildView()
+
+	// Table preview should show column headers from the vendor preview.
+	assert.Contains(t, view, "Name")
+	assert.Contains(t, view, "Email")
+	assert.Contains(t, view, "Phone")
+
+	// And the data values.
+	assert.Contains(t, view, "Garcia Plumbing")
+	assert.Contains(t, view, "info@garcia.com")
+	assert.Contains(t, view, "555-1234")
+}
+
+func TestOpsTreeNoTablePreviewForUnknownTables(t *testing.T) {
+	t.Parallel()
+	m := newTestModelWithStore(t)
+
+	// Ops targeting a table with no previewColumns mapping.
+	unknownOps := []byte(`[{"action":"create","table":"unknown_table","data":{"foo":"bar"}}]`)
+	doc := &data.Document{
+		Title:         "Unknown Table Doc",
+		FileName:      "unknown.pdf",
+		MIMEType:      "application/pdf",
+		ExtractionOps: unknownOps,
+	}
+	require.NoError(t, m.store.CreateDocument(doc))
+
+	m.active = tabIndex(tabDocuments)
+	require.NoError(t, m.reloadTab(m.effectiveTab()))
+
+	tab := m.effectiveTab()
+	tab.ColCursor = int(documentColOps)
+	sendKey(m, "enter")
+	require.NotNil(t, m.opsTree)
+
+	// previewGroups should be empty since unknown_table has no column defs.
+	assert.Empty(t, m.opsTree.previewGroups)
+
+	// Should still render without crashing.
+	view := m.buildView()
+	assert.Contains(t, view, "operations")
+}
+
+var testMultiTableOpsJSON = []byte(`[
+	{"action":"create","table":"vendors","data":{"name":"Garcia Plumbing","email":"info@garcia.com","phone":"555-1234"}},
+	{"action":"create","table":"appliances","data":{"name":"Dishwasher","brand":"Bosch","model_number":"SHP65"}},
+	{"action":"update","table":"documents","data":{"title":"Invoice #42"}}
+]`)
+
+func newMultiTableOpsTreeModel(t *testing.T) *Model {
+	t.Helper()
+
+	m := newTestModelWithStore(t)
+
+	doc := &data.Document{
+		Title:         "Multi-Table Invoice",
+		FileName:      "invoice.pdf",
+		MIMEType:      "application/pdf",
+		ExtractionOps: testMultiTableOpsJSON,
+	}
+	require.NoError(t, m.store.CreateDocument(doc))
+
+	m.active = tabIndex(tabDocuments)
+	require.NoError(t, m.reloadTab(m.effectiveTab()))
+
+	return m
+}
+
+func TestOpsTreeTabSwitchBF(t *testing.T) {
+	t.Parallel()
+	m := newMultiTableOpsTreeModel(t)
+
+	tab := m.effectiveTab()
+	tab.ColCursor = int(documentColOps)
+	sendKey(m, "enter")
+	require.NotNil(t, m.opsTree)
+	// vendors + appliances + documents = 3 groups.
+	require.Len(t, m.opsTree.previewGroups, 3)
+
+	assert.Equal(t, 0, m.opsTree.previewTab)
+
+	sendKey(m, "f")
+	assert.Equal(t, 1, m.opsTree.previewTab)
+
+	sendKey(m, "f")
+	assert.Equal(t, 2, m.opsTree.previewTab)
+
+	// f at last should clamp (no wrap).
+	sendKey(m, "f")
+	assert.Equal(t, 2, m.opsTree.previewTab)
+
+	sendKey(m, "b")
+	assert.Equal(t, 1, m.opsTree.previewTab)
+
+	sendKey(m, "b")
+	assert.Equal(t, 0, m.opsTree.previewTab)
+
+	// b at 0 should clamp (no wrap).
+	sendKey(m, "b")
+	assert.Equal(t, 0, m.opsTree.previewTab)
+}
+
+func TestOpsTreeMouseClickTab(t *testing.T) {
+	t.Parallel()
+	m := newMultiTableOpsTreeModel(t)
+
+	tab := m.effectiveTab()
+	tab.ColCursor = int(documentColOps)
+	sendKey(m, "enter")
+	require.NotNil(t, m.opsTree)
+	require.GreaterOrEqual(t, len(m.opsTree.previewGroups), 2)
+
+	// Render twice to populate zones (mark pass + scan pass).
+	m.View()
+	m.View()
+
+	// Click on second tab.
+	z := m.zones.Get(fmt.Sprintf("%s%d", zoneOpsTab, 1))
+	if z == nil || z.IsZero() {
+		t.Skip("ops tab zone not rendered (terminal too small)")
+	}
+	sendClick(m, z.StartX, z.StartY)
+
+	assert.Equal(t, 1, m.opsTree.previewTab)
+}
+
+func TestOpsTreeSingleGroupNoTabBar(t *testing.T) {
+	t.Parallel()
+	m := newTestModelWithStore(t)
+
+	// Single-table ops (vendors only).
+	singleOps := []byte(
+		`[{"action":"create","table":"vendors","data":{"name":"Solo Vendor","email":"solo@test.com"}}]`,
+	)
+	doc := &data.Document{
+		Title:         "Single Table Doc",
+		FileName:      "single.pdf",
+		MIMEType:      "application/pdf",
+		ExtractionOps: singleOps,
+	}
+	require.NoError(t, m.store.CreateDocument(doc))
+
+	m.active = tabIndex(tabDocuments)
+	require.NoError(t, m.reloadTab(m.effectiveTab()))
+
+	tab := m.effectiveTab()
+	tab.ColCursor = int(documentColOps)
+	sendKey(m, "enter")
+	require.NotNil(t, m.opsTree)
+	require.Len(t, m.opsTree.previewGroups, 1)
+
+	view := m.buildView()
+	// Should show the table data but no tab bar.
+	assert.Contains(t, view, "Solo Vendor")
+	// b/f hint should not appear for single group.
+	assert.NotContains(t, view, "tabs")
 }

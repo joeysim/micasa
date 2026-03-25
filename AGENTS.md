@@ -174,7 +174,6 @@ details; do not duplicate that detail here.
 - `/pre-commit-check` -- before committing, to verify code compiles and tests pass
 - `/blog-post` -- when writing or updating Hugo blog content in `docs/`
 - `/debug-dump` -- when diagnosing rendering bugs (VHS or live TUI)
-- `/rev` -- rebase onto main, address PR review feedback, fix failing CI
 - `/fix-ci` -- diagnose and fix failing CI jobs on the current PR
 
 ### Shell and tools
@@ -360,6 +359,13 @@ details; do not duplicate that detail here.
   status bar message via `setStatusInfo`.
 - **Visual consistency across paired surfaces**: When changing a UI
   element's appearance, audit every surface echoing the same semantics.
+- **Content must fit its container**: Every piece of rendered content --
+  hint bars, table rows, headers, status messages -- must fit within its
+  viewport, overlay, or panel without wrapping or being clipped. When
+  adding content to a fixed-width container, compute whether it fits. If
+  it doesn't, widen the container (e.g. `previewNaturalWidth`), truncate
+  the content, or use a responsive layout. Never assume existing widths
+  will accommodate new content.
 - **Clickability for every interactive element**: Every new UI feature
   must consider mouse clickability alongside keyboard interaction.
   Zone-mark all interactive elements with `m.zones.Mark(id, content)`.

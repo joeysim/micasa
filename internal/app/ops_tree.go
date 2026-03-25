@@ -15,10 +15,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/micasa-dev/micasa/internal/extract"
 )
 
 // Zone ID prefix for clickable tree nodes (expand/collapse toggle).
 const zoneOpsNode = "ops-node-"
+
+// Zone ID prefix for clickable table preview tabs.
+const zoneOpsTab = "ops-tab-"
 
 // Box-drawing characters for tree rendering (eza --tree style).
 const (
@@ -57,11 +61,13 @@ func (n *jsonTreeNode) isExpandable() bool {
 
 // opsTreeState holds the state for the interactive JSON tree overlay.
 type opsTreeState struct {
-	root     []*jsonTreeNode // single-element: the "operations" wrapper
-	cursor   int             // index into visibleNodes()
-	expanded map[string]bool // keyed by node path
-	docTitle string          // document title shown in overlay header
-	maxNodes int             // total node count when fully expanded (for stable viewport)
+	root          []*jsonTreeNode     // single-element: the "operations" wrapper
+	cursor        int                 // index into visibleNodes()
+	expanded      map[string]bool     // keyed by node path
+	docTitle      string              // document title shown in overlay header
+	maxNodes      int                 // total node count when fully expanded (for stable viewport)
+	previewGroups []previewTableGroup // grouped extraction ops for table preview
+	previewTab    int                 // active tab index into previewGroups
 }
 
 // visibleNodes returns the flattened list of currently visible tree nodes,
@@ -323,6 +329,29 @@ func (m *Model) openOpsTree() {
 		docTitle: doc.Title,
 		maxNodes: countAllNodes(root),
 	}
+
+	var ops []extract.Operation
+	if err := json.Unmarshal(doc.ExtractionOps, &ops); err == nil && len(ops) > 0 {
+		m.opsTree.previewGroups = groupOperationsByTable(ops, m.cur)
+	}
+
+	// Account for table preview section height in maxNodes so the overlay
+	// doesn't jump when collapsing tree nodes.
+	if groups := m.opsTree.previewGroups; len(groups) > 0 {
+		maxRows := 0
+		for _, g := range groups {
+			if len(g.cells) > maxRows {
+				maxRows = len(g.cells)
+			}
+		}
+		// divider(1) + header(1) + table-divider(1) + rows
+		extra := 3 + maxRows
+		if len(groups) > 1 {
+			// tab-bar(1) + underline(1)
+			extra += 2
+		}
+		m.opsTree.maxNodes += extra
+	}
 }
 
 // handleOpsTreeKey handles key events for the ops tree overlay.
@@ -371,6 +400,14 @@ func (m *Model) handleOpsTreeKey(key tea.KeyPressMsg) tea.Cmd {
 				}
 			}
 		}
+	case keyB:
+		if len(tree.previewGroups) > 1 && tree.previewTab > 0 {
+			tree.previewTab--
+		}
+	case keyF:
+		if len(tree.previewGroups) > 1 && tree.previewTab < len(tree.previewGroups)-1 {
+			tree.previewTab++
+		}
 	case keyG:
 		tree.cursor = 0
 	case keyShiftG:
@@ -385,8 +422,37 @@ func (m *Model) handleOpsTreeKey(key tea.KeyPressMsg) tea.Cmd {
 // buildOpsTreeOverlay renders the ops tree overlay.
 func (m *Model) buildOpsTreeOverlay() string {
 	tree := m.opsTree
+	frameW := m.styles.OverlayBox().GetHorizontalFrameSize()
+
+	// Build hint bar early so we can measure it for width calculation.
+	hintParts := []string{
+		m.helpItem(keyJ+"/"+keyK, "nav"),
+		m.helpItem(symReturn, "toggle"),
+		m.helpItem(keyH, "collapse"),
+	}
+	if len(tree.previewGroups) > 1 {
+		hintParts = append(hintParts, m.helpItem(keyB+"/"+keyF, "tabs"))
+	}
+	hintParts = append(hintParts, m.helpItem(keyEsc, "close"))
+	hints := joinWithSeparator(m.helpSeparator(), hintParts...)
+
+	// Compute content width: widen to fit hint bar and preview tables.
 	contentW := m.overlayContentWidth()
-	innerW := contentW - m.styles.OverlayBox().GetHorizontalFrameSize()
+	screenW := m.effectiveWidth() - 8
+	if needed := ansi.StringWidth(hints) + frameW; needed > contentW {
+		contentW = needed
+	}
+	if groups := tree.previewGroups; len(groups) > 0 {
+		sep := m.styles.TableSeparator().Render(" " + symVLine + " ")
+		sepW := lipgloss.Width(sep)
+		if needed := previewNaturalWidth(groups, sepW, m.cur.Symbol()) + frameW; needed > contentW {
+			contentW = needed
+		}
+	}
+	if contentW > screenW {
+		contentW = screenW
+	}
+	innerW := contentW - frameW
 
 	var b strings.Builder
 
@@ -413,13 +479,52 @@ func (m *Model) buildOpsTreeOverlay() string {
 		b.WriteString("\n")
 	}
 
+	// Table preview section.
+	if groups := tree.previewGroups; len(groups) > 0 {
+		// Divider.
+		b.WriteString(appStyles.TextDim().Render(strings.Repeat(symHLine, innerW)))
+		b.WriteString("\n")
+
+		// Tab bar (only if multiple groups).
+		if len(groups) > 1 {
+			tabParts := make([]string, 0, len(groups)*2)
+			for i, g := range groups {
+				var rendered string
+				if i == tree.previewTab {
+					rendered = m.styles.TabActive().Render(g.name)
+				} else {
+					rendered = m.styles.TabInactive().Render(g.name)
+				}
+				tabParts = append(tabParts, m.zones.Mark(
+					fmt.Sprintf("%s%d", zoneOpsTab, i), rendered,
+				))
+				if i < len(groups)-1 {
+					tabParts = append(tabParts, "   ")
+				}
+			}
+			b.WriteString(lipgloss.JoinHorizontal(lipgloss.Left, tabParts...))
+			b.WriteString("\n")
+			b.WriteString(m.styles.TabUnderline().Render(
+				strings.Repeat(symHLineHeavy, innerW),
+			))
+			b.WriteString("\n")
+		}
+
+		// Active table (non-interactive, dimmed).
+		tabIdx := tree.previewTab
+		if tabIdx >= len(groups) {
+			tabIdx = 0
+		}
+		g := groups[tabIdx]
+		sep := m.styles.TableSeparator().Render(" " + symVLine + " ")
+		divSep := m.styles.TableSeparator().Render(symHLine + symCross + symHLine)
+		sepW := lipgloss.Width(sep)
+		tableStr := m.renderPreviewTable(g, innerW, sepW, sep, divSep, false)
+		b.WriteString(appStyles.TextDim().Render(tableStr))
+		b.WriteString("\n")
+	}
+
 	b.WriteString("\n")
-	hints := joinWithSeparator(m.helpSeparator(),
-		m.helpItem(keyJ+"/"+keyK, "nav"),
-		m.helpItem(symReturn, "toggle"),
-		m.helpItem(keyH, "collapse"),
-		m.helpItem(keyEsc, "close"),
-	)
 	b.WriteString(hints)
 
 	return m.styles.OverlayBox().
