@@ -34,6 +34,10 @@ vendor
 *.sqlite-shm
 *.sqlite-wal
 
+# SQLite WAL/SHM sidecar files
+*-shm
+*-wal
+
 # GoReleaser
 dist/
 
