@@ -403,8 +403,68 @@ func (m *Model) inlineInputStatusView() string {
 }
 
 func (m *Model) modeStatusHelp(modeBadge string) string {
-	m.helpModel.SetWidth(m.effectiveWidth() - lipgloss.Width(modeBadge) - 1)
-	return modeBadge + " " + m.helpModel.ShortHelpView(m.ShortHelp())
+	maxW := m.effectiveWidth()
+	sep := m.helpSeparator()
+	bindings := m.ShortHelp()
+
+	items := make([]string, 0, len(bindings)+1)
+	items = append(items, modeBadge)
+
+	for _, kb := range bindings {
+		if !kb.Enabled() {
+			continue
+		}
+		h := kb.Help()
+		item := m.helpItem(h.Key, h.Desc)
+		if id := hintZoneID(kb.Keys()); id != "" {
+			item = m.zones.Mark(zoneHint+id, item)
+		}
+		items = append(items, item)
+	}
+
+	// Fit within available width by dropping optional items from the end,
+	// keeping the mode badge (index 0) and help hint (index 1) always.
+	for len(items) > 2 {
+		line := joinWithSeparator(sep, items...)
+		if lipgloss.Width(line) <= maxW {
+			return line
+		}
+		items = items[:len(items)-1]
+	}
+
+	return joinWithSeparator(sep, items...)
+}
+
+// hintZoneID maps a keybinding's trigger keys to its mouse zone
+// identifier for handleHintClick. Uses the actual key triggers
+// (key.Binding.Keys()) rather than display strings so that
+// presentation changes don't break click zones. Checks all
+// trigger aliases, not just the first.
+// Returns "" for bindings without a click handler.
+func hintZoneID(keys []string) string {
+	for _, k := range keys {
+		switch k {
+		case keyQuestion:
+			return "help"
+		case keyI:
+			return "edit"
+		case keyAt:
+			return "ask"
+		case keyEnter:
+			return "enter"
+		case keyA:
+			return "add"
+		case keyD:
+			return "del"
+		case keyO:
+			return "open"
+		case keyCtrlF:
+			return "search"
+		case keyEsc:
+			return "exit"
+		}
+	}
+	return ""
 }
 
 // withStatusMessage renders the help line, prepending the status message if set.

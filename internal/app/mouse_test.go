@@ -244,6 +244,84 @@ func TestHintClickEntersEditMode(t *testing.T) {
 	assert.Equal(t, modeEdit, m.mode, "clicking edit hint should enter edit mode")
 }
 
+// TestHintClickExitsEditMode verifies that clicking the exit hint
+// returns to nav mode from edit mode.
+func TestHintClickExitsEditMode(t *testing.T) {
+	t.Parallel()
+	m := newTestModelWithStore(t)
+	sendKey(m, "i") // enter edit mode
+	require.Equal(t, modeEdit, m.mode)
+
+	z := requireZone(t, m, "hint-exit")
+
+	sendClick(m, z.StartX, z.StartY)
+	assert.Equal(t, modeNormal, m.mode, "clicking exit hint should return to nav mode")
+}
+
+// TestHintClickAddsEntry verifies that clicking the add hint in edit
+// mode opens the add form.
+func TestHintClickAddsEntry(t *testing.T) {
+	t.Parallel()
+	m := newTestModelWithStore(t)
+	sendKey(m, "i") // enter edit mode
+	require.Equal(t, modeEdit, m.mode)
+
+	z := requireZone(t, m, "hint-add")
+
+	sendClick(m, z.StartX, z.StartY)
+	assert.Equal(t, modeForm, m.mode, "clicking add hint should open form")
+}
+
+// TestHintClickDeleteZoneExists verifies that the del hint zone is
+// present in edit mode so clicks can dispatch to the delete handler.
+func TestHintClickDeleteZoneExists(t *testing.T) {
+	t.Parallel()
+	m := newTestModelWithDemoData(t, 42)
+	sendKey(m, "i") // enter edit mode
+	require.Equal(t, modeEdit, m.mode)
+
+	requireZone(t, m, "hint-del")
+}
+
+// TestHintClickOpensChat verifies that clicking the ask hint opens the
+// chat overlay when an LLM client is configured.
+func TestHintClickOpensChat(t *testing.T) {
+	t.Parallel()
+	m := newTestModelWithStore(t)
+	m.llmClient = testLLMClient(t, "test-model")
+	require.Equal(t, modeNormal, m.mode)
+	require.Nil(t, m.chat, "chat should not exist before click")
+
+	z := requireZone(t, m, "hint-ask")
+
+	sendClick(m, z.StartX, z.StartY)
+	require.NotNil(t, m.chat, "clicking ask hint should open chat")
+	assert.True(t, m.chat.Visible, "chat should be visible after clicking ask hint")
+}
+
+// TestHintClickEnterDrills verifies that clicking the enter hint on a
+// drilldown column opens the detail view.
+func TestHintClickEnterDrills(t *testing.T) {
+	t.Parallel()
+	m := newTestModelWithDemoData(t, 42)
+
+	tab := m.effectiveTab()
+	require.NotNil(t, tab)
+	for i, spec := range tab.Specs {
+		if spec.Kind == cellDrilldown {
+			tab.ColCursor = i
+			break
+		}
+	}
+	require.NotEmpty(t, m.enterHint(), "should have an enter hint on drilldown column")
+	require.False(t, m.inDetail(), "should not be in detail view before click")
+
+	z := requireZone(t, m, "hint-enter")
+
+	sendClick(m, z.StartX, z.StartY)
+	assert.True(t, m.inDetail(), "clicking enter hint on drilldown column should open detail view")
+}
+
 // TestScrollWheelInHelpOverlay verifies that scroll wheel events in the
 // help overlay scroll the help content instead of the table.
 func TestScrollWheelInHelpOverlay(t *testing.T) {
