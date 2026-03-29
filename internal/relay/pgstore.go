@@ -55,7 +55,7 @@ func (pgDevice) TableName() string { return "devices" }
 type pgOp struct {
 	Seq         int64     `gorm:"primaryKey;autoIncrement:false"`
 	HouseholdID string    `gorm:"primaryKey"`
-	ID          string    `gorm:"column:id;not null;uniqueIndex:idx_ops_dedup,composite:household_id"`
+	ID          string    `gorm:"column:id;not null"`
 	DeviceID    string    `gorm:"column:device_id;not null"`
 	Nonce       []byte    `gorm:"not null;type:bytea"`
 	Ciphertext  []byte    `gorm:"not null;type:bytea"`
@@ -146,10 +146,22 @@ func (s *PgStore) AutoMigrate() error {
 	if err := s.db.Exec(`DROP INDEX IF EXISTS idx_households_stripe_customer_id`).Error; err != nil {
 		return err
 	}
-	return s.db.Exec(`
+	if err := s.db.Exec(`
 		CREATE UNIQUE INDEX idx_households_stripe_customer_id
 		ON households (stripe_customer_id)
 		WHERE stripe_customer_id IS NOT NULL
+	`).Error; err != nil {
+		return err
+	}
+	// Composite unique index for op dedup: same op ID allowed in different
+	// households. GORM's uniqueIndex tag with composite doesn't reliably
+	// produce a multi-column index, so we manage it manually.
+	if err := s.db.Exec(`DROP INDEX IF EXISTS idx_ops_dedup`).Error; err != nil {
+		return err
+	}
+	return s.db.Exec(`
+		CREATE UNIQUE INDEX idx_ops_dedup
+		ON ops (id, household_id)
 	`).Error
 }
 
@@ -402,7 +414,8 @@ func (s *PgStore) StartJoin(
 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var inv pgInvite
-		if err := tx.Where("code = ?", code).First(&inv).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("code = ?", code).First(&inv).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("invite code not found")
 			}
@@ -499,7 +512,8 @@ func (s *PgStore) CompleteKeyExchange(
 ) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var ex pgKeyExchange
-		if err := tx.Where("id = ?", exchangeID).First(&ex).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", exchangeID).First(&ex).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("key exchange %s not found", exchangeID)
 			}
@@ -635,21 +649,23 @@ func (s *PgStore) ListDevices(
 }
 
 func (s *PgStore) RevokeDevice(ctx context.Context, householdID, deviceID string) error {
-	var dev pgDevice
-	err := s.db.WithContext(ctx).Where("id = ?", deviceID).First(&dev).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return fmt.Errorf("device %s not found", deviceID)
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var dev pgDevice
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", deviceID).First(&dev).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("device %s not found", deviceID)
+			}
+			return fmt.Errorf("find device: %w", err)
 		}
-		return fmt.Errorf("find device: %w", err)
-	}
-	if dev.HouseholdID != householdID {
-		return fmt.Errorf("device does not belong to this household")
-	}
+		if dev.HouseholdID != householdID {
+			return fmt.Errorf("device does not belong to this household")
+		}
 
-	return s.db.WithContext(ctx).Model(&pgDevice{}).
-		Where("id = ?", deviceID).
-		Update("revoked", true).Error
+		return tx.Model(&pgDevice{}).
+			Where("id = ?", deviceID).
+			Update("revoked", true).Error
+	})
 }
 
 func (s *PgStore) GetHousehold(
