@@ -153,6 +153,12 @@ type ollamaPullState struct {
 	Scanner *ollamaPull.PullScanner
 }
 
+// close cancels the context and closes the scanner's HTTP body.
+func (ps *ollamaPullState) close() {
+	ps.Cancel()
+	_ = ps.Scanner.Close()
+}
+
 // openChat shows the chat overlay. If a session already exists it is
 // un-hidden; otherwise a fresh session is created. Returns a tea.Cmd
 // that starts the cursor blink timer (required for periodic redraws
@@ -686,11 +692,11 @@ func startPull(appCtx context.Context, baseURL, name string) tea.Msg {
 func readNextPullChunk(ps *ollamaPullState) tea.Msg {
 	chunk, err := ps.Scanner.Next()
 	if err != nil {
-		ps.Cancel()
+		ps.close()
 		return pullProgressMsg{Err: err, Done: true, PullState: ps, Model: ps.Model}
 	}
 	if chunk == nil {
-		ps.Cancel()
+		ps.close()
 		return pullProgressMsg{
 			Status:    ps.Model + " ready",
 			Done:      true,
@@ -700,7 +706,7 @@ func readNextPullChunk(ps *ollamaPullState) tea.Msg {
 	}
 	// Check if Ollama streamed an error in the chunk itself.
 	if chunk.Error != "" {
-		ps.Cancel()
+		ps.close()
 		return pullProgressMsg{
 			Err:       fmt.Errorf("%s", chunk.Error),
 			Done:      true,
@@ -793,6 +799,9 @@ func (m *Model) handleSQLResult(msg sqlResultMsg) tea.Cmd {
 	}
 
 	m.chat.StreamCh = ch
+	if m.chat.CancelFn != nil {
+		m.chat.CancelFn()
+	}
 	m.chat.CancelFn = cancel
 	// The assistant message already exists from stage 1; we'll populate its Content field.
 	m.refreshChatViewport()
@@ -818,6 +827,9 @@ func (m *Model) startFallbackStream(question string) tea.Cmd {
 	}
 
 	m.chat.StreamCh = ch
+	if m.chat.CancelFn != nil {
+		m.chat.CancelFn()
+	}
 	m.chat.CancelFn = cancel
 	m.chat.Messages = append(m.chat.Messages, chatMessage{
 		Role: roleAssistant, Content: "",
@@ -922,6 +934,7 @@ func (m *Model) replaceAssistantWithError(errMsg string) {
 // handleSQLStreamStarted processes the initial SQL stream setup.
 func (m *Model) handleSQLStreamStarted(msg sqlStreamStartedMsg) tea.Cmd {
 	if msg.Err != nil {
+		msg.CancelFn()
 		m.chat.Streaming = false
 		m.chat.StreamingSQL = false
 		m.removeLastNotice()
@@ -953,7 +966,10 @@ func (m *Model) handleSQLChunk(msg sqlChunkMsg) tea.Cmd {
 	if msg.Err != nil {
 		m.chat.Streaming = false
 		m.chat.StreamingSQL = false
-		m.chat.CancelFn = nil
+		if m.chat.CancelFn != nil {
+			m.chat.CancelFn()
+			m.chat.CancelFn = nil
+		}
 		m.removeLastNotice()
 		m.replaceAssistantWithError(msg.Err.Error())
 		return nil
@@ -982,6 +998,10 @@ func (m *Model) handleSQLChunk(msg sqlChunkMsg) tea.Cmd {
 
 		if sql == "" {
 			m.chat.Streaming = false
+			if m.chat.CancelFn != nil {
+				m.chat.CancelFn()
+				m.chat.CancelFn = nil
+			}
 			m.replaceAssistantWithError("LLM returned empty SQL")
 			return nil
 		}

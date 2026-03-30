@@ -43,9 +43,20 @@ type PullChunk struct {
 }
 
 // PullScanner wraps the streaming response from the Ollama pull API.
+// Callers must call Close when they are done iterating, even if Next
+// has not yet returned nil.
 type PullScanner struct {
 	body    io.ReadCloser
 	scanner *bufio.Scanner
+}
+
+// Close releases the underlying HTTP response body. It is safe to call
+// multiple times.
+func (ps *PullScanner) Close() error {
+	if err := ps.body.Close(); err != nil {
+		return fmt.Errorf("close pull scanner: %w", err)
+	}
+	return nil
 }
 
 // Next returns the next progress chunk, or nil at EOF.
@@ -64,7 +75,6 @@ func (ps *PullScanner) Next() (*PullChunk, error) {
 	if err := ps.scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scanning pull response: %w", err)
 	}
-	_ = ps.body.Close()
 	return nil, nil // EOF
 }
 
