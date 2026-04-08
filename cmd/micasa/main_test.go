@@ -263,6 +263,16 @@ func TestCompletionCmd(t *testing.T) {
 	}
 }
 
+func TestRootHelpGroupsCommands(t *testing.T) {
+	t.Parallel()
+	out, err := executeCLI("-h")
+	require.NoError(t, err)
+	assert.Contains(t, out, "CORE COMMANDS")
+	assert.Contains(t, out, "ENTITY MANAGEMENT")
+	assert.Contains(t, out, "projects")
+	assert.Contains(t, out, "vendors")
+}
+
 // createTestDB creates a migrated, seeded SQLite database file and returns
 // its path. The file lives in a test-scoped temp directory.
 func createTestDB(t *testing.T) string {
