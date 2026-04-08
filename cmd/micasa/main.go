@@ -51,9 +51,16 @@ func newRootCmd() *cobra.Command {
 	opts := &runOpts{}
 
 	root := &cobra.Command{
-		Use:           data.AppName + " [database-path]",
-		Short:         "A terminal UI for tracking everything about your home",
-		Long:          "A terminal UI for tracking everything about your home.",
+		Use:   data.AppName + " [database-path]",
+		Short: "A terminal UI for tracking everything about your home",
+		Long: `A terminal UI for tracking everything about your home.
+
+Entity management:
+  <entity> list [database-path]
+  <entity> add [database-path] --data <json> | --data-file <path>
+  <entity> edit <id> [database-path] --data <json> | --data-file <path>
+  <entity> delete <id> [database-path]
+  <entity> restore <id> [database-path]`,
 		Args:          cobra.MaximumNArgs(1),
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -64,15 +71,10 @@ func newRootCmd() *cobra.Command {
 			return runTUI(cmd.OutOrStdout(), opts)
 		},
 	}
-	root.AddGroup(
-		&cobra.Group{ID: "core", Title: "Core Commands"},
-		&cobra.Group{ID: "entity", Title: "Entity Management"},
-	)
-
 	root.Flags().
 		BoolVar(&opts.printPath, "print-path", false, "Print the resolved database path and exit")
 
-	coreCommands := []*cobra.Command{
+	root.AddCommand(
 		newDemoCmd(),
 		newBackupCmd(),
 		newConfigCmd(),
@@ -80,17 +82,8 @@ func newRootCmd() *cobra.Command {
 		newMCPCmd(),
 		newShowCmd(),
 		newQueryCmd(),
-	}
-	for _, cmd := range coreCommands {
-		cmd.GroupID = "core"
-	}
-	root.AddCommand(coreCommands...)
-
-	entityCommands := newEntityCommands()
-	for _, cmd := range entityCommands {
-		cmd.GroupID = "entity"
-	}
-	root.AddCommand(entityCommands...)
+	)
+	root.AddCommand(newEntityCommands()...)
 
 	return root
 }

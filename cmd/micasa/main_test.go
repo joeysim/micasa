@@ -263,12 +263,13 @@ func TestCompletionCmd(t *testing.T) {
 	}
 }
 
-func TestRootHelpGroupsCommands(t *testing.T) {
+func TestRootHelpEntityManagementGuidance(t *testing.T) {
 	t.Parallel()
 	out, err := executeCLI("-h")
 	require.NoError(t, err)
-	assert.Contains(t, out, "CORE COMMANDS")
-	assert.Contains(t, out, "ENTITY MANAGEMENT")
+	assert.Contains(t, out, "Entity management:")
+	assert.Contains(t, out, "<entity> list")
+	assert.Contains(t, out, "--data <json> | --data-file <path>")
 	assert.Contains(t, out, "projects")
 	assert.Contains(t, out, "vendors")
 }

@@ -50,9 +50,13 @@ func newEntityCommand(
 	runner mutateFn,
 	supportsRestore bool,
 ) *cobra.Command {
+	short := "Manage " + name + " (list/add/edit/delete/restore; add/edit use --data or --data-file)"
+	if name == "house" {
+		short = "Manage house (list/add/edit; add/edit use --data or --data-file)"
+	}
 	entityCmd := &cobra.Command{
 		Use:           name,
-		Short:         "Manage " + name,
+		Short:         short,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
