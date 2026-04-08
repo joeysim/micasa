@@ -77,6 +77,7 @@ func newRootCmd() *cobra.Command {
 		newShowCmd(),
 		newQueryCmd(),
 	)
+	root.AddCommand(newEntityCommands()...)
 
 	return root
 }

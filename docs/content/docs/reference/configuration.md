@@ -9,9 +9,10 @@ micasa has minimal configuration -- it's designed to work out of the box.
 
 ## CLI
 
-micasa has three subcommands. `run` is the default and launches the TUI;
-`config` manages configuration (query values or open the config file in an
-editor); `backup` creates a database snapshot.
+micasa includes TUI, reporting, and management subcommands. `run` is the
+default and launches the TUI; `config` manages configuration; `backup`
+creates a database snapshot; and entity commands (`projects`, `vendors`,
+`maintenance`, etc.) support `list/add/edit/delete/restore` workflows.
 
 ```
 Usage: micasa <command> [flags]
@@ -21,6 +22,8 @@ Commands:
   config get [<filter>]   Query config values with a jq filter.
   config edit             Open the config file in an editor.
   backup [<dest>]         Back up the database to a file.
+  <entity> <subcommand>   Entity CRUD (house, projects, quotes, maintenance,
+                          service-log, appliances, incidents, vendors, documents).
 
 Flags:
   -h, --help       Show context-sensitive help.
@@ -106,6 +109,30 @@ run while the TUI is open:
 ```sh
 micasa backup ~/backups/micasa-$(date +%F).db
 micasa backup --source /path/to/micasa.db ~/backups/snapshot.db
+```
+
+### Entity CRUD commands
+
+```
+Entities: house, projects, quotes, maintenance, service-log, appliances,
+incidents, vendors, documents
+
+micasa <entity> list [<db-path>] [--json] [--deleted]
+micasa <entity> add [<db-path>] (--data ... | --data-file ...)
+micasa <entity> edit <id> [<db-path>] (--data ... | --data-file ...)
+micasa <entity> delete <id> [<db-path>]
+micasa <entity> restore <id> [<db-path>]
+```
+
+`house` supports `list/add/edit` (single-profile workflow). Other entities
+support the full `list/add/edit/delete/restore` lifecycle.
+
+```sh
+micasa projects list --json
+micasa vendors add --data '{"name":"Acme Plumbing","email":"ops@example.com"}'
+micasa vendors edit 01J... --data '{"name":"Acme Plumbing and Heating"}'
+micasa vendors delete 01J...
+micasa vendors restore 01J...
 ```
 
 ## Platform data directory
