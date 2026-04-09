@@ -71,6 +71,7 @@ Entity management:
 			return runTUI(cmd.OutOrStdout(), opts)
 		},
 	}
+	root.AddGroup(&cobra.Group{ID: "entity", Title: "Entity Management"})
 	root.Flags().
 		BoolVar(&opts.printPath, "print-path", false, "Print the resolved database path and exit")
 
@@ -83,7 +84,11 @@ Entity management:
 		newShowCmd(),
 		newQueryCmd(),
 	)
-	root.AddCommand(newEntityCommands()...)
+	entityCommands := newEntityCommands()
+	for _, cmd := range entityCommands {
+		cmd.GroupID = "entity"
+	}
+	root.AddCommand(entityCommands...)
 
 	return root
 }

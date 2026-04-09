@@ -267,6 +267,8 @@ func TestRootHelpEntityManagementGuidance(t *testing.T) {
 	t.Parallel()
 	out, err := executeCLI("-h")
 	require.NoError(t, err)
+	assert.Contains(t, out, "\n  COMMANDS")
+	assert.Contains(t, out, "\n  ENTITY MANAGEMENT")
 	assert.Contains(t, out, "Entity management:")
 	assert.Contains(t, out, "<entity> list")
 	assert.Contains(t, out, "--data <json> | --data-file <path>")
