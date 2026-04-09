@@ -64,7 +64,7 @@ func newRootCmd() *cobra.Command {
 			return runTUI(cmd.OutOrStdout(), opts)
 		},
 	}
-
+	root.AddGroup(&cobra.Group{ID: "entity", Title: "Entity Management"})
 	root.Flags().
 		BoolVar(&opts.printPath, "print-path", false, "Print the resolved database path and exit")
 
@@ -77,6 +77,11 @@ func newRootCmd() *cobra.Command {
 		newShowCmd(),
 		newQueryCmd(),
 	)
+	entityCommands := newEntityCommands()
+	for _, cmd := range entityCommands {
+		cmd.GroupID = "entity"
+	}
+	root.AddCommand(entityCommands...)
 
 	return root
 }
