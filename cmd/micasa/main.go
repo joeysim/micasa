@@ -83,6 +83,7 @@ Entity management:
 		newMCPCmd(),
 		newShowCmd(),
 		newQueryCmd(),
+		newGenCLIRefCmd(),
 	)
 	entityCommands := newEntityCommands()
 	for _, cmd := range entityCommands {
